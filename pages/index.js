@@ -113,6 +113,35 @@ function IconClose() {
   );
 }
 
+function IconCalendar() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+      <rect x="0.75" y="1.75" width="9.5" height="8.5" rx="1.5" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M0.75 4.5h9.5" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M3.5 0.5v2M7.5 0.5v2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function DueBadge({ due, status }) {
+  if (!due) return null;
+  const overdue = isOverdue({ due, status });
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const daysUntil = Math.ceil((new Date(due) - today) / 86400000);
+  const soon = !overdue && daysUntil <= 5 && status !== 'Done';
+  return (
+    <span className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-lg ${
+      overdue ? 'bg-red-100 text-red-600' :
+      soon    ? 'bg-amber-100 text-amber-700' :
+                'bg-slate-100 text-slate-500'
+    }`}>
+      <IconCalendar />
+      {overdue ? `Overdue · ${formatDate(due)}` : soon ? `Due soon · ${formatDate(due)}` : formatDate(due)}
+    </span>
+  );
+}
+
 export default function Home() {
   const [items, setItems] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -310,6 +339,9 @@ export default function Home() {
             stats={stats}
             milestones={milestones}
             progressFor={progressFor}
+            tasksFor={tasksFor}
+            cycleStatus={cycleStatus}
+            deleteItem={deleteItem}
             setActiveSection={setActiveSection}
           />
         )}
@@ -364,7 +396,10 @@ export default function Home() {
 /* ─────────────────────────────────────────────
    Dashboard view
 ───────────────────────────────────────────── */
-function DashboardView({ stats, milestones, progressFor, setActiveSection }) {
+function DashboardView({ stats, milestones, progressFor, tasksFor, cycleStatus, deleteItem, setActiveSection }) {
+  const [expanded, setExpanded] = useState({});
+  const toggleExpand = (id) => setExpanded((p) => ({ ...p, [id]: !p[id] }));
+
   return (
     <div className="p-6 lg:p-10 max-w-5xl">
       <div className="mb-8">
@@ -417,44 +452,106 @@ function DashboardView({ stats, milestones, progressFor, setActiveSection }) {
               onClick={() => setActiveSection('milestones')}
               className="text-sm text-violet-600 hover:text-violet-700 font-semibold transition-colors"
             >
-              View all →
+              Manage all →
             </button>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-3">
             {milestones.map((m, idx) => {
               const theme = MILESTONE_THEMES[idx % MILESTONE_THEMES.length];
               const progress = progressFor(m.id);
-              const overdue = isOverdue(m);
+              const tasks = tasksFor(m.id);
+              const isExpanded = expanded[m.id];
               return (
-                <div key={m.id} className={`rounded-2xl border p-5 ${theme.bg} ${theme.border} shadow-sm`}>
-                  <div className="flex items-start justify-between gap-2 mb-3">
-                    <p className="font-semibold text-slate-800 text-sm font-display leading-snug">{m.title}</p>
-                    <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg flex-shrink-0 ${STATUS_STYLES[m.status]}`}>
-                      {m.status}
-                    </span>
+                <div key={m.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                  {/* Coloured stripe */}
+                  <div className={`h-1 bg-gradient-to-r ${theme.bar}`} />
+
+                  <div className="p-4">
+                    {/* Header row */}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-slate-900 text-sm font-display leading-snug">{m.title}</p>
+                        {/* Due badge */}
+                        {m.due && (
+                          <div className="mt-1.5">
+                            <DueBadge due={m.due} status={m.status} />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        {/* Clickable status badge */}
+                        <button
+                          onClick={() => cycleStatus(m.id)}
+                          title="Click to change status"
+                          className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-all hover:scale-105 active:scale-95 cursor-pointer ${STATUS_STYLES[m.status]}`}
+                        >
+                          {m.status}
+                        </button>
+                        <button
+                          onClick={() => deleteItem(m.id)}
+                          className="w-7 h-7 flex items-center justify-center text-slate-300 hover:text-red-400 transition-colors"
+                        >
+                          <IconClose />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Progress bar */}
+                    {progress !== null && (
+                      <div className="mt-3">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className={`text-xs font-bold ${theme.text}`}>{progress.pct}%</span>
+                          <span className="text-xs text-slate-400">{progress.done}/{progress.total} tasks done</span>
+                        </div>
+                        <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden shadow-inner">
+                          <div
+                            className={`h-full bg-gradient-to-r ${theme.bar} rounded-full transition-all duration-500`}
+                            style={{ width: `${progress.pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Expand/collapse tasks */}
+                    {tasks.length > 0 && (
+                      <button
+                        onClick={() => toggleExpand(m.id)}
+                        className={`mt-3 text-xs font-medium transition-colors flex items-center gap-1 ${theme.text} hover:opacity-80`}
+                      >
+                        <svg width="10" height="10" viewBox="0 0 10 10" className={`transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}>
+                          <path d="M2 1.5L7.5 5L2 8.5" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        {isExpanded ? 'Hide tasks' : `Show ${tasks.length} task${tasks.length !== 1 ? 's' : ''}`}
+                      </button>
+                    )}
                   </div>
 
-                  {progress !== null ? (
-                    <>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className={`text-xs font-bold ${theme.text}`}>{progress.pct}%</span>
-                        <span className="text-xs text-slate-400">{progress.done}/{progress.total} tasks</span>
-                      </div>
-                      <div className="h-2.5 bg-white/70 rounded-full overflow-hidden shadow-inner">
-                        <div
-                          className={`h-full bg-gradient-to-r ${theme.bar} rounded-full transition-all duration-500`}
-                          style={{ width: `${progress.pct}%` }}
-                        />
-                      </div>
-                    </>
-                  ) : (
-                    <p className="text-xs text-slate-400 italic">No tasks yet</p>
-                  )}
-
-                  {m.due && (
-                    <p className={`text-xs mt-2.5 font-medium ${overdue ? 'text-orange-600' : 'text-slate-400'}`}>
-                      Due {formatDate(m.due)}{overdue ? ' · overdue' : ''}
-                    </p>
+                  {/* Inline task list */}
+                  {isExpanded && tasks.length > 0 && (
+                    <div className="border-t border-slate-50">
+                      {tasks.map((t) => {
+                        const taskOverdue = isOverdue(t);
+                        return (
+                          <div key={t.id} className="flex items-center gap-3 px-4 py-2.5 pl-10 border-b border-slate-50 last:border-b-0 hover:bg-slate-50/60 transition-colors">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs text-slate-700 font-medium leading-snug truncate">{t.title}</p>
+                              {t.due && (
+                                <div className="mt-1">
+                                  <DueBadge due={t.due} status={t.status} />
+                                </div>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => cycleStatus(t.id)}
+                              title="Click to change status"
+                              className={`text-[10px] font-semibold px-2 py-0.5 rounded-md flex-shrink-0 transition-all hover:scale-105 active:scale-95 cursor-pointer ${STATUS_STYLES[t.status]}`}
+                            >
+                              {t.status}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
               );
@@ -621,12 +718,8 @@ function MilestonesView({
                     </div>
 
                     {/* Meta */}
-                    <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                      {m.due && (
-                        <span className={`text-xs font-medium ${overdue ? 'text-orange-600' : 'text-slate-400'}`}>
-                          {formatDate(m.due)}{overdue ? ' · overdue' : ''}
-                        </span>
-                      )}
+                    <div className="flex items-center gap-2 mt-2 flex-wrap">
+                      {m.due && <DueBadge due={m.due} status={m.status} />}
                       {progress !== null && (
                         <span className="text-xs text-slate-400">
                           {progress.done}/{progress.total} tasks
@@ -901,7 +994,7 @@ function TasksView({
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1 min-w-0">
                         <p className="text-sm text-slate-800 font-medium leading-snug">{t.title}</p>
-                        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                           {milestoneName && (
                             <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-violet-100 text-violet-600">
                               {milestoneName}
@@ -912,11 +1005,7 @@ function TasksView({
                               Standalone
                             </span>
                           )}
-                          {t.due && (
-                            <span className={`text-xs font-medium ${overdue ? 'text-orange-600' : 'text-slate-400'}`}>
-                              {formatDate(t.due)}{overdue ? ' · overdue' : ''}
-                            </span>
-                          )}
+                          {t.due && <DueBadge due={t.due} status={t.status} />}
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -990,13 +1079,9 @@ function TaskRow({ task, onCycle, onDelete, onToggleNotes, notesExpanded, onUpda
               </button>
             </div>
           </div>
-          <div className="flex items-center gap-3 mt-1">
-            {task.due && (
-              <span className={`text-xs font-medium ${overdue ? 'text-orange-600' : 'text-slate-400'}`}>
-                {formatDate(task.due)}{overdue ? ' · overdue' : ''}
-              </span>
-            )}
-            <button onClick={onToggleNotes} className="text-xs text-slate-400 hover:text-slate-600 transition-colors">
+          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+            {task.due && <DueBadge due={task.due} status={task.status} />}
+            <button onClick={onToggleNotes} className="text-[11px] text-slate-400 hover:text-slate-600 transition-colors">
               {notesExpanded ? 'Hide notes' : 'Notes'}
             </button>
           </div>
