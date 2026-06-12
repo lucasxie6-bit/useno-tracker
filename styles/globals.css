@@ -1,0 +1,56 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  background: #FAF9F6;
+  color: #2B2A28;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, .font-display {
+  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+}
+
+input, select, textarea {
+  font-family: inherit;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0.5;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(43,42,40,0.12);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .input-soft {
+    @apply h-10 px-3 rounded-xl border border-black/[0.06] bg-white text-sm text-ink placeholder:text-muted/70 outline-none transition-all duration-150 focus:border-sage-400 focus:ring-2 focus:ring-sage-100;
+  }
+  .btn-soft {
+    @apply h-10 px-4 rounded-xl border border-black/[0.06] bg-white text-sm font-medium text-ink transition-all duration-150 hover:bg-black/[0.02] active:scale-[0.98];
+  }
+  .btn-primary {
+    @apply h-10 px-4 rounded-xl bg-ink text-cream text-sm font-medium transition-all duration-150 hover:bg-black active:scale-[0.98];
+  }
+  .card-soft {
+    @apply bg-white rounded-2xl border border-black/[0.05] shadow-card;
+  }
+}
