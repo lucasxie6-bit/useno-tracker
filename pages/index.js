@@ -152,6 +152,7 @@ export default function Home() {
   const [expandedNotes, setExpandedNotes] = useState({});
   const [activeSection, setActiveSection] = useState('dashboard');
   const [statusFilter, setStatusFilter] = useState('All');
+  const [milestoneOrder, setMilestoneOrder] = useState(null); // null = not yet initialised
 
   const [milestoneForm, setMilestoneForm] = useState({ title: '', due: '', notes: '' });
   const [taskForm, setTaskForm] = useState({ title: '', status: 'Not started', due: '', notes: '' });
@@ -168,7 +169,38 @@ export default function Home() {
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
 
+  // Initialise order (by due date) once after first load
+  useEffect(() => {
+    if (!loaded || milestoneOrder !== null) return;
+    const sorted = [...items.filter(i => i.type === 'Milestone')].sort((a, b) => {
+      if (!a.due && !b.due) return 0;
+      if (!a.due) return 1;
+      if (!b.due) return -1;
+      return new Date(a.due) - new Date(b.due);
+    });
+    setMilestoneOrder(sorted.map(m => m.id));
+  }, [loaded, milestoneOrder, items]);
+
   const milestones = useMemo(() => items.filter((i) => i.type === 'Milestone'), [items]);
+
+  // Milestones in display order (by due date default, then manual reordering)
+  const orderedMilestones = useMemo(() => {
+    if (!milestoneOrder) return milestones;
+    const map = new Map(milestoneOrder.map((id, i) => [id, i]));
+    return [...milestones].sort((a, b) => (map.get(a.id) ?? 999) - (map.get(b.id) ?? 999));
+  }, [milestones, milestoneOrder]);
+
+  function moveMilestone(id, dir) {
+    setMilestoneOrder(prev => {
+      if (!prev) return prev;
+      const idx = prev.indexOf(id);
+      const newIdx = idx + dir;
+      if (idx === -1 || newIdx < 0 || newIdx >= prev.length) return prev;
+      const next = [...prev];
+      [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
+      return next;
+    });
+  }
   const allTasks = useMemo(() => items.filter((i) => i.type === 'Task'), [items]);
 
   const stats = useMemo(() => {
@@ -207,6 +239,7 @@ export default function Home() {
 
   async function deleteItem(id) {
     setItems((prev) => prev.filter((i) => i.id !== id && i.parent !== id));
+    setMilestoneOrder(prev => prev ? prev.filter(oid => oid !== id) : null);
     const { error } = await supabase.from('items').delete().eq('id', id);
     if (error) { setError(error.message); fetchItems(); }
   }
@@ -215,6 +248,12 @@ export default function Home() {
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, notes } : i)));
     const { error } = await supabase.from('items').update({ notes }).eq('id', id);
     if (error) setError(error.message);
+  }
+
+  async function updateItem(id, fields) {
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...fields } : i)));
+    const { error } = await supabase.from('items').update(fields).eq('id', id);
+    if (error) { setError(error.message); fetchItems(); }
   }
 
   async function saveMilestone() {
@@ -226,7 +265,12 @@ export default function Home() {
       .select()
       .single();
     if (error) { setError(error.message); }
-    else { setItems((prev) => [...prev, data]); setMilestoneForm({ title: '', due: '', notes: '' }); setShowMilestoneForm(false); }
+    else {
+      setItems((prev) => [...prev, data]);
+      setMilestoneOrder(prev => prev ? [...prev, data.id] : null);
+      setMilestoneForm({ title: '', due: '', notes: '' });
+      setShowMilestoneForm(false);
+    }
   }
 
   async function saveTask(parentId) {
@@ -337,17 +381,19 @@ export default function Home() {
         {activeSection === 'dashboard' && (
           <DashboardView
             stats={stats}
-            milestones={milestones}
+            milestones={orderedMilestones}
             progressFor={progressFor}
             tasksFor={tasksFor}
             cycleStatus={cycleStatus}
             deleteItem={deleteItem}
+            updateItem={updateItem}
             setActiveSection={setActiveSection}
           />
         )}
         {activeSection === 'milestones' && (
           <MilestonesView
-            milestones={milestones}
+            milestones={orderedMilestones}
+            moveMilestone={moveMilestone}
             collapsed={collapsed}
             expandedNotes={expandedNotes}
             showMilestoneForm={showMilestoneForm}
@@ -396,9 +442,32 @@ export default function Home() {
 /* ─────────────────────────────────────────────
    Dashboard view
 ───────────────────────────────────────────── */
-function DashboardView({ stats, milestones, progressFor, tasksFor, cycleStatus, deleteItem, setActiveSection }) {
+function DashboardView({ stats, milestones, progressFor, tasksFor, cycleStatus, deleteItem, updateItem, setActiveSection }) {
   const [expanded, setExpanded] = useState({});
+  const [editing, setEditing] = useState({}); // { [id]: 'title' | 'due' }
+  const [drafts, setDrafts] = useState({});   // { [id]: { title, due } }
+
   const toggleExpand = (id) => setExpanded((p) => ({ ...p, [id]: !p[id] }));
+
+  function startEdit(id, field, currentValue) {
+    setEditing((p) => ({ ...p, [id]: field }));
+    setDrafts((p) => ({ ...p, [id]: { ...p[id], [field]: currentValue ?? '' } }));
+  }
+
+  function commitEdit(id, field, m) {
+    const val = drafts[id]?.[field];
+    if (val !== undefined) {
+      const trimmed = field === 'title' ? val.trim() : val;
+      if (field === 'title' && !trimmed) { cancelEdit(id); return; }
+      const current = field === 'title' ? m.title : m.due;
+      if (trimmed !== current) updateItem(id, { [field]: trimmed || null });
+    }
+    cancelEdit(id);
+  }
+
+  function cancelEdit(id) {
+    setEditing((p) => { const n = { ...p }; delete n[id]; return n; });
+  }
 
   return (
     <div className="p-6 lg:p-10 max-w-5xl">
@@ -469,14 +538,58 @@ function DashboardView({ stats, milestones, progressFor, tasksFor, cycleStatus, 
                   <div className="p-4">
                     {/* Header row */}
                     <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-bold text-slate-900 text-sm font-display leading-snug">{m.title}</p>
-                        {/* Due badge */}
-                        {m.due && (
+                      <div className="flex items-start gap-2.5 flex-1 min-w-0">
+                        <span className={`w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 bg-gradient-to-br ${theme.gradient} text-white text-[10px] font-bold shadow-sm mt-0.5`}>
+                          {idx + 1}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          {/* Editable title */}
+                          {editing[m.id] === 'title' ? (
+                            <input
+                              autoFocus
+                              className="w-full text-sm font-bold text-slate-900 font-display bg-white border border-violet-300 rounded-lg px-2 py-0.5 outline-none focus:ring-2 focus:ring-violet-100"
+                              value={drafts[m.id]?.title ?? ''}
+                              onChange={(e) => setDrafts((p) => ({ ...p, [m.id]: { ...p[m.id], title: e.target.value } }))}
+                              onBlur={() => commitEdit(m.id, 'title', m)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(m.id, 'title', m); if (e.key === 'Escape') cancelEdit(m.id); }}
+                            />
+                          ) : (
+                            <button
+                              onClick={() => startEdit(m.id, 'title', m.title)}
+                              className="text-left w-full font-bold text-slate-900 text-sm font-display leading-snug hover:text-violet-700 transition-colors group"
+                              title="Click to edit title"
+                            >
+                              {m.title}
+                              <span className="ml-1 opacity-0 group-hover:opacity-40 text-xs font-normal">✏</span>
+                            </button>
+                          )}
+
+                          {/* Editable due date */}
                           <div className="mt-1.5">
-                            <DueBadge due={m.due} status={m.status} />
+                            {editing[m.id] === 'due' ? (
+                              <input
+                                type="date"
+                                autoFocus
+                                className="h-7 px-2 text-xs rounded-lg border border-violet-300 outline-none focus:ring-2 focus:ring-violet-100 bg-white"
+                                value={drafts[m.id]?.due ?? ''}
+                                onChange={(e) => setDrafts((p) => ({ ...p, [m.id]: { ...p[m.id], due: e.target.value } }))}
+                                onBlur={() => commitEdit(m.id, 'due', m)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(m.id, 'due', m); if (e.key === 'Escape') cancelEdit(m.id); }}
+                              />
+                            ) : (
+                              <button
+                                onClick={() => startEdit(m.id, 'due', m.due ? m.due.slice(0, 10) : '')}
+                                className="group flex items-center gap-1"
+                                title="Click to edit due date"
+                              >
+                                {m.due
+                                  ? <DueBadge due={m.due} status={m.status} />
+                                  : <span className="text-[11px] text-slate-300 hover:text-slate-500 transition-colors">+ Add due date</span>
+                                }
+                              </button>
+                            )}
                           </div>
-                        )}
+                        </div>
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
                         {/* Clickable status badge */}
@@ -602,7 +715,7 @@ function LegendDot({ color, label, className }) {
    Milestones view
 ───────────────────────────────────────────── */
 function MilestonesView({
-  milestones, collapsed, expandedNotes,
+  milestones, moveMilestone, collapsed, expandedNotes,
   showMilestoneForm, setShowMilestoneForm,
   milestoneForm, setMilestoneForm,
   taskForm, setTaskForm, taskFormFor, setTaskFormFor,
@@ -689,10 +802,15 @@ function MilestonesView({
 
               <div className="p-5">
                 <div className="flex items-start gap-3">
+                  {/* Number badge */}
+                  <div className={`w-7 h-7 rounded-xl flex items-center justify-center flex-shrink-0 bg-gradient-to-br ${theme.gradient} text-white text-xs font-bold shadow-sm mt-0.5`}>
+                    {idx + 1}
+                  </div>
+
                   {/* Collapse toggle */}
                   <button
                     onClick={() => toggleCollapse(m.id)}
-                    className="mt-0.5 w-6 h-6 flex items-center justify-center text-slate-400 hover:text-slate-700 transition-colors flex-shrink-0"
+                    className="mt-1.5 w-5 h-5 flex items-center justify-center text-slate-400 hover:text-slate-700 transition-colors flex-shrink-0"
                   >
                     <IconChevron collapsed={isCollapsed} />
                   </button>
@@ -701,13 +819,32 @@ function MilestonesView({
                     {/* Title row */}
                     <div className="flex items-start justify-between gap-2">
                       <p className="font-bold text-slate-900 text-sm font-display leading-snug">{m.title}</p>
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <div className="flex items-center gap-1 flex-shrink-0">
                         <button
                           onClick={() => cycleStatus(m.id)}
                           className={`text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${STATUS_STYLES[m.status]}`}
                         >
                           {m.status}
                         </button>
+                        {/* Up / down */}
+                        <div className="flex flex-col gap-px">
+                          <button
+                            onClick={() => moveMilestone(m.id, -1)}
+                            disabled={idx === 0}
+                            className="w-5 h-4 flex items-center justify-center text-slate-300 hover:text-slate-600 disabled:opacity-20 transition-colors"
+                            title="Move up"
+                          >
+                            <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 5L4 1.5L7 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                          </button>
+                          <button
+                            onClick={() => moveMilestone(m.id, 1)}
+                            disabled={idx === milestones.length - 1}
+                            className="w-5 h-4 flex items-center justify-center text-slate-300 hover:text-slate-600 disabled:opacity-20 transition-colors"
+                            title="Move down"
+                          >
+                            <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 1L4 4.5L7 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                          </button>
+                        </div>
                         <button
                           onClick={() => deleteItem(m.id)}
                           className="w-7 h-7 flex items-center justify-center text-slate-300 hover:text-red-400 transition-colors"
